@@ -6,6 +6,7 @@ import ItemCatalog from './components/ItemCatalog';
 import PricingCalculator from './components/PricingCalculator';
 import InvoiceMaker from './components/InvoiceMaker';
 import Ledger from './components/Ledger';
+import Auth from './components/Auth';
 import './index.css';
 
 const NAV_ITEMS = [
@@ -17,10 +18,15 @@ const NAV_ITEMS = [
 ];
 
 function AppContent() {
-  const { toast, loading } = useFinance();
+  const { session, logout, toast, loading } = useFinance();
   const [page, setPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [invoiceOrderData, setInvoiceOrderData] = useState(null);
+
+  // If no user is logged in, show the Auth component
+  if (!session) {
+    return <Auth />;
+  }
 
   const handleCreateInvoice = (orderData) => {
     setInvoiceOrderData(orderData);
@@ -84,11 +90,14 @@ function AppContent() {
         </nav>
 
         <div style={{ padding: '16px 14px', borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
+          <div style={{ marginBottom: 12, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+            <div style={{ wordBreak: 'break-all', opacity: 0.8 }}>👤 {session.user.email}</div>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={logout} style={{ width: '100%', marginBottom: 16 }}>
+            Log Out
+          </button>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
             © 2026 Sweet Delights
-          </div>
-          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 2 }}>
-            Cloud-synced via Supabase
           </div>
         </div>
       </aside>

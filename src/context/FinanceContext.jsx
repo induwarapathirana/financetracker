@@ -1,9 +1,11 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 
 const FinanceContext = createContext();
 
 export function FinanceProvider({ children }) {
+  const [session, setSession] = useState(null);
   const [rawMaterials, setRawMaterials] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -16,8 +18,35 @@ export function FinanceProvider({ children }) {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // ─── Load all data on mount ───
+  // ─── INIT AUTH SESSION ───
+  useEffect(() => {
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    // Listen to login/logout
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (!session) {
+        // Clear data on logout
+        setRawMaterials([]);
+        setCatalog([]);
+        setInvoices([]);
+        setExpenses([]);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // ─── LOAD DATA ONLY IF LOGGED IN ───
   const loadAll = useCallback(async () => {
+    if (!session) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const [matRes, catRes, invRes, expRes] = await Promise.all([
@@ -37,7 +66,6 @@ export function FinanceProvider({ children }) {
 
       if (matRes.data) setRawMaterials(matRes.data);
       if (catRes.data) {
-        // Sort multipliers by sort_order
         const items = catRes.data.map(item => ({
           ...item,
           item_multipliers: (item.item_multipliers || []).sort((a, b) => a.sort_order - b.sort_order),
@@ -51,9 +79,14 @@ export function FinanceProvider({ children }) {
       showToast('Failed to load data', 'error');
     }
     setLoading(false);
-  }, []);
+  }, [session]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    if (session) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      loadAll();
+    }
+  }, [session, loadAll]);
 
   // ─── RAW MATERIALS ───
   const addRawMaterial = async (mat) => {
@@ -78,7 +111,7 @@ export function FinanceProvider({ children }) {
     showToast('Ingredient removed');
   };
 
-  // ─── CATALOG ITEMS (with recipes, multipliers, addons) ───
+  // ─── CATALOG ITEMS ───
   const addCatalogItem = async (item, recipes, multipliers, addons) => {
     const { data, error } = await supabase.from('catalog_items').insert({
       name: item.name,
@@ -88,21 +121,18 @@ export function FinanceProvider({ children }) {
     }).select().single();
     if (error) { showToast(error.message, 'error'); return null; }
 
-    // Insert recipes
     if (recipes?.length) {
       await supabase.from('item_recipes').insert(
         recipes.map(r => ({ item_id: data.id, material_id: r.material_id, quantity: r.quantity }))
       );
     }
 
-    // Insert multipliers
     if (multipliers?.length) {
       await supabase.from('item_multipliers').insert(
         multipliers.map((m, idx) => ({ item_id: data.id, type: m.type, label: m.label, multiplier: m.multiplier, sort_order: idx }))
       );
     }
 
-    // Insert addons
     if (addons?.length) {
       await supabase.from('item_addons').insert(
         addons.map(a => ({ item_id: data.id, name: a.name, addon_cost: a.addon_cost, addon_price: a.addon_price }))
@@ -110,7 +140,7 @@ export function FinanceProvider({ children }) {
     }
 
     showToast('Product added to catalog');
-    await loadAll(); // Reload to get full joined data
+    await loadAll();
     return data;
   };
 
@@ -123,7 +153,6 @@ export function FinanceProvider({ children }) {
     }).eq('id', id);
     if (error) { showToast(error.message, 'error'); return; }
 
-    // Replace recipes
     await supabase.from('item_recipes').delete().eq('item_id', id);
     if (recipes?.length) {
       await supabase.from('item_recipes').insert(
@@ -131,7 +160,6 @@ export function FinanceProvider({ children }) {
       );
     }
 
-    // Replace multipliers
     await supabase.from('item_multipliers').delete().eq('item_id', id);
     if (multipliers?.length) {
       await supabase.from('item_multipliers').insert(
@@ -139,7 +167,6 @@ export function FinanceProvider({ children }) {
       );
     }
 
-    // Replace addons
     await supabase.from('item_addons').delete().eq('item_id', id);
     if (addons?.length) {
       await supabase.from('item_addons').insert(
@@ -233,7 +260,6 @@ export function FinanceProvider({ children }) {
     };
   };
 
-  // ─── HELPER: Calculate item's recipe cost ───
   const getRecipeCost = (item) => {
     if (!item.item_recipes?.length) return 0;
     return item.item_recipes.reduce((sum, r) => {
@@ -242,8 +268,13 @@ export function FinanceProvider({ children }) {
     }, 0);
   };
 
+  const logout = async () => {
+    await supabase.auth.signOut();
+  };
+
   return (
     <FinanceContext.Provider value={{
+      session, logout,
       rawMaterials, catalog, invoices, expenses, loading,
       addRawMaterial, updateRawMaterial, deleteRawMaterial,
       addCatalogItem, updateCatalogItem, deleteCatalogItem,
