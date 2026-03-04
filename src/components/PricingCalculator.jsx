@@ -2,25 +2,33 @@ import { useState } from 'react';
 import { useFinance } from '../context/FinanceContext';
 
 export default function PricingCalculator({ onCreateInvoice }) {
-    const { catalog, complexityLevels, creativityLevels } = useFinance();
+    const { catalog, getRecipeCost } = useFinance();
     const [orderItems, setOrderItems] = useState([]);
     const [selectedItemId, setSelectedItemId] = useState('');
 
     const addOrderItem = () => {
         if (!selectedItemId) return;
-        const catalogItem = catalog.find(i => i.id === selectedItemId);
-        if (!catalogItem) return;
+        const item = catalog.find(i => i.id === selectedItemId);
+        if (!item) return;
+
+        const complexityTiers = (item.item_multipliers || []).filter(m => m.type === 'complexity');
+        const creativityTiers = (item.item_multipliers || []).filter(m => m.type === 'creativity');
+        const itemAddons = item.item_addons || [];
+
         setOrderItems(prev => [
             ...prev,
             {
                 uid: Date.now(),
-                catalogId: catalogItem.id,
-                name: catalogItem.name,
-                category: catalogItem.category,
-                baseCost: catalogItem.baseCost,
-                basePrice: catalogItem.basePrice,
-                complexity: 0,
-                creativity: 0,
+                catalogId: item.id,
+                name: item.name,
+                category: item.category,
+                recipeCost: getRecipeCost(item),
+                basePrice: Number(item.base_price),
+                complexityTiers,
+                creativityTiers,
+                addons: itemAddons.map(a => ({ ...a, selected: false })),
+                selectedComplexity: complexityTiers.length > 0 ? 0 : -1,
+                selectedCreativity: creativityTiers.length > 0 ? 0 : -1,
                 quantity: 1,
             },
         ]);
@@ -31,24 +39,40 @@ export default function PricingCalculator({ onCreateInvoice }) {
         setOrderItems(prev => prev.map(i => i.uid === uid ? { ...i, [field]: value } : i));
     };
 
+    const toggleAddon = (uid, addonIdx) => {
+        setOrderItems(prev => prev.map(i => {
+            if (i.uid !== uid) return i;
+            const newAddons = [...i.addons];
+            newAddons[addonIdx] = { ...newAddons[addonIdx], selected: !newAddons[addonIdx].selected };
+            return { ...i, addons: newAddons };
+        }));
+    };
+
     const removeItem = (uid) => {
         setOrderItems(prev => prev.filter(i => i.uid !== uid));
     };
 
     const calcLine = (item) => {
-        const cxMult = complexityLevels[item.complexity].multiplier;
-        const crMult = creativityLevels[item.creativity].multiplier;
-        const finalPrice = item.basePrice * cxMult * crMult * item.quantity;
-        const totalCost = item.baseCost * item.quantity;
-        const profit = finalPrice - totalCost;
-        return { finalPrice: Math.round(finalPrice), totalCost: Math.round(totalCost), profit: Math.round(profit) };
+        const cxMult = item.selectedComplexity >= 0 ? Number(item.complexityTiers[item.selectedComplexity]?.multiplier || 1) : 1;
+        const crMult = item.selectedCreativity >= 0 ? Number(item.creativityTiers[item.selectedCreativity]?.multiplier || 1) : 1;
+        const selectedAddons = item.addons.filter(a => a.selected);
+        const addonsCost = selectedAddons.reduce((s, a) => s + Number(a.addon_cost || 0), 0);
+        const addonsPrice = selectedAddons.reduce((s, a) => s + Number(a.addon_price || 0), 0);
+
+        const unitPrice = item.basePrice * cxMult * crMult + addonsPrice;
+        const unitCost = item.recipeCost + addonsCost;
+        const totalPrice = Math.round(unitPrice * item.quantity);
+        const totalCost = Math.round(unitCost * item.quantity);
+        const profit = totalPrice - totalCost;
+
+        return { unitPrice: Math.round(unitPrice), totalPrice, totalCost, profit, cxMult, crMult };
     };
 
     const orderTotals = orderItems.reduce(
         (acc, item) => {
             const line = calcLine(item);
             return {
-                totalPrice: acc.totalPrice + line.finalPrice,
+                totalPrice: acc.totalPrice + line.totalPrice,
                 totalCost: acc.totalCost + line.totalCost,
                 totalProfit: acc.totalProfit + line.profit,
             };
@@ -62,15 +86,19 @@ export default function PricingCalculator({ onCreateInvoice }) {
         if (orderItems.length === 0) return;
         const lineItems = orderItems.map(item => {
             const line = calcLine(item);
+            const cxLabel = item.selectedComplexity >= 0 ? item.complexityTiers[item.selectedComplexity]?.label : 'Standard';
+            const crLabel = item.selectedCreativity >= 0 ? item.creativityTiers[item.selectedCreativity]?.label : 'Standard';
+            const selectedAddons = item.addons.filter(a => a.selected);
             return {
-                name: item.name,
+                item_name: item.name,
                 category: item.category,
                 quantity: item.quantity,
-                complexity: complexityLevels[item.complexity].label,
-                creativity: creativityLevels[item.creativity].label,
-                unitPrice: Math.round(item.basePrice * complexityLevels[item.complexity].multiplier * creativityLevels[item.creativity].multiplier),
-                totalPrice: line.finalPrice,
-                totalCost: line.totalCost,
+                complexity_label: cxLabel,
+                creativity_label: crLabel,
+                addons_json: selectedAddons.map(a => ({ name: a.name, cost: a.addon_cost, price: a.addon_price })),
+                unit_price: line.unitPrice,
+                total_price: line.totalPrice,
+                total_cost: line.totalCost,
                 profit: line.profit,
             };
         });
@@ -86,7 +114,7 @@ export default function PricingCalculator({ onCreateInvoice }) {
         <div className="animate-in">
             <div className="page-header">
                 <h2>Pricing Calculator</h2>
-                <p>Build an order — select items, adjust complexity & creativity, see live profit</p>
+                <p>Build an order — select items, adjust tiers & add-ons, see live profit</p>
             </div>
 
             {/* Add item row */}
@@ -97,7 +125,9 @@ export default function PricingCalculator({ onCreateInvoice }) {
                         onChange={e => setSelectedItemId(e.target.value)}>
                         <option value="">— Choose an item —</option>
                         {catalog.map(it => (
-                            <option key={it.id} value={it.id}>{it.name} ({it.category}) — Rs. {it.basePrice.toLocaleString()}</option>
+                            <option key={it.id} value={it.id}>
+                                {it.name} ({it.category}) — Rs. {Number(it.base_price).toLocaleString()}
+                            </option>
                         ))}
                     </select>
                 </div>
@@ -128,24 +158,28 @@ export default function PricingCalculator({ onCreateInvoice }) {
                                     </div>
 
                                     <div className="modifier-row">
-                                        <div className="form-group" style={{ marginBottom: 0 }}>
-                                            <label className="form-label">Complexity</label>
-                                            <select className="form-select" value={item.complexity}
-                                                onChange={e => updateItem(item.uid, 'complexity', Number(e.target.value))}>
-                                                {complexityLevels.map((lvl, idx) => (
-                                                    <option key={idx} value={idx}>{lvl.label} ({lvl.multiplier}x)</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                        <div className="form-group" style={{ marginBottom: 0 }}>
-                                            <label className="form-label">Creativity</label>
-                                            <select className="form-select" value={item.creativity}
-                                                onChange={e => updateItem(item.uid, 'creativity', Number(e.target.value))}>
-                                                {creativityLevels.map((lvl, idx) => (
-                                                    <option key={idx} value={idx}>{lvl.label} ({lvl.multiplier}x)</option>
-                                                ))}
-                                            </select>
-                                        </div>
+                                        {item.complexityTiers.length > 0 && (
+                                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                                <label className="form-label">Complexity</label>
+                                                <select className="form-select" value={item.selectedComplexity}
+                                                    onChange={e => updateItem(item.uid, 'selectedComplexity', Number(e.target.value))}>
+                                                    {item.complexityTiers.map((tier, idx) => (
+                                                        <option key={idx} value={idx}>{tier.label} ({tier.multiplier}x)</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+                                        {item.creativityTiers.length > 0 && (
+                                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                                <label className="form-label">Creativity</label>
+                                                <select className="form-select" value={item.selectedCreativity}
+                                                    onChange={e => updateItem(item.uid, 'selectedCreativity', Number(e.target.value))}>
+                                                    {item.creativityTiers.map((tier, idx) => (
+                                                        <option key={idx} value={idx}>{tier.label} ({tier.multiplier}x)</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
                                         <div className="form-group" style={{ marginBottom: 0 }}>
                                             <label className="form-label">Qty</label>
                                             <input className="form-input" type="number" min="1" value={item.quantity}
@@ -153,8 +187,25 @@ export default function PricingCalculator({ onCreateInvoice }) {
                                         </div>
                                     </div>
 
+                                    {/* Add-ons */}
+                                    {item.addons.length > 0 && (
+                                        <div style={{ marginBottom: 12 }}>
+                                            <label className="form-label" style={{ marginBottom: 8 }}>Add-ons</label>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                                {item.addons.map((addon, addonIdx) => (
+                                                    <button key={addonIdx}
+                                                        className={`btn btn-sm ${addon.selected ? 'btn-accent' : 'btn-secondary'}`}
+                                                        onClick={() => toggleAddon(item.uid, addonIdx)}
+                                                        style={{ fontSize: '0.78rem' }}>
+                                                        {addon.selected ? '✓ ' : ''}{addon.name} (+Rs. {Number(addon.addon_price).toLocaleString()})
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div style={{ display: 'flex', gap: 24, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                                        <span>Price: <strong style={{ color: 'var(--text-primary)' }}>{formatCurrency(line.finalPrice)}</strong></span>
+                                        <span>Price: <strong style={{ color: 'var(--text-primary)' }}>{formatCurrency(line.totalPrice)}</strong></span>
                                         <span>Cost: <strong style={{ color: 'var(--color-danger)' }}>{formatCurrency(line.totalCost)}</strong></span>
                                         <span>Profit: <strong style={{ color: 'var(--color-success)' }}>{formatCurrency(line.profit)}</strong></span>
                                     </div>
@@ -176,7 +227,7 @@ export default function PricingCalculator({ onCreateInvoice }) {
                                     <span style={{ color: 'var(--text-secondary)' }}>
                                         {item.name} ×{item.quantity}
                                     </span>
-                                    <span>{formatCurrency(line.finalPrice)}</span>
+                                    <span>{formatCurrency(line.totalPrice)}</span>
                                 </div>
                             );
                         })}

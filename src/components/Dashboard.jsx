@@ -18,7 +18,7 @@ export default function Dashboard() {
 
             <div className="stat-grid">
                 <div className="stat-card income">
-                    <div className="stat-label">Total Income</div>
+                    <div className="stat-label">Total Revenue</div>
                     <div className="stat-value">{formatCurrency(stats.totalIncome)}</div>
                 </div>
                 <div className="stat-card expenses">
@@ -36,7 +36,6 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-                {/* Recent Invoices */}
                 <div className="card">
                     <div className="card-title">Recent Invoices</div>
                     {recentInvoices.length === 0 ? (
@@ -51,14 +50,16 @@ export default function Dashboard() {
                                     <tr>
                                         <th>Customer</th>
                                         <th>Amount</th>
+                                        <th>Profit</th>
                                         <th>Status</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {recentInvoices.map(inv => (
                                         <tr key={inv.id}>
-                                            <td>{inv.customerName}</td>
-                                            <td style={{ fontWeight: 600 }}>{formatCurrency(inv.totalPrice)}</td>
+                                            <td>{inv.customer_name}</td>
+                                            <td style={{ fontWeight: 600 }}>{formatCurrency(Number(inv.total_price))}</td>
+                                            <td style={{ fontWeight: 600, color: 'var(--color-success)' }}>{formatCurrency(Number(inv.total_profit))}</td>
                                             <td>
                                                 <span className={`badge badge-${inv.status === 'paid' ? 'success' : inv.status === 'cancelled' ? 'danger' : 'warning'}`}>
                                                     {inv.status}
@@ -72,7 +73,6 @@ export default function Dashboard() {
                     )}
                 </div>
 
-                {/* Recent Expenses */}
                 <div className="card">
                     <div className="card-title">Recent Expenses</div>
                     {recentExpenses.length === 0 ? (
@@ -94,9 +94,9 @@ export default function Dashboard() {
                                     {recentExpenses.map(exp => (
                                         <tr key={exp.id}>
                                             <td>{exp.description}</td>
-                                            <td><span className="badge badge-info">{exp.category}</span></td>
+                                            <td><span className={`badge ${exp.category === 'Transportation' || exp.category === 'Delivery' ? 'badge-warning' : 'badge-info'}`}>{exp.category}</span></td>
                                             <td style={{ fontWeight: 600, color: 'var(--color-danger)' }}>
-                                                {formatCurrency(exp.amount)}
+                                                {formatCurrency(Number(exp.amount))}
                                             </td>
                                         </tr>
                                     ))}
